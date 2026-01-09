@@ -1,207 +1,197 @@
 import streamlit as st
-import tensorflow as tf
-from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing.sequence import pad_sequences
+import numpy as np
 import pickle
 import re
-import numpy as np
-# Uncomment these if you want to use Sastrawi for preprocessing
-# from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
-# from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
+import json
 
-# Set page config
+from tensorflow.keras.models import load_model
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
+
+MAX_LEN = 180
+
+# Define Topic Mapping (0-7) derived from dataset samples
+TOPIC_MAPPING = {
+    0: "Pengalaman Pengguna & Stabilitas",  # E.g., "mudah dipahami", "tidak error"
+    1: "Kepuasan Pengguna",                 # E.g., "puas", "terima kasih"
+    2: "Kebermanfaatan Aplikasi",           # E.g., "sangat membantu"
+    3: "Edukasi & Investasi",               # E.g., "belajar", "investor", "trader"
+    4: "Fitur & Transaksi",                 # E.g., "sell opsional", "triger"
+    5: "Pendaftaran & Akun (RDN)",          # E.g., "RDN jadi", "verifikasi"
+    6: "Dividen & Keuangan",                # E.g., "pembayaran dividen"
+    7: "Kendala Teknis & Error"             # E.g., "gagal", "loading", "bug"
+}
+
 st.set_page_config(
-    page_title="ABSA - Stockbit Analysis",
-    page_icon="📊",
+    page_title="Aspect-Based Sentiment Analysis",
     layout="centered"
 )
 
-# Constants
-MAX_SEQUENCE_LENGTH = 100
-TOPIC_MAPPING = {
-    0: 'Desain & Pengalaman Pengguna (UI/UX)',  # User-friendly, Tampilan, CS
-    1: 'Kemudahan Penggunaan & Pemula',         # Mudah, Simple, Cocok untuk Pemula
-    2: 'Kepuasan & Kepercayaan Pengguna',       # Puas, Terpercaya, Mantap
-    3: 'Fitur Trading & Edukasi Investasi',     # Chart, Analisa, Belajar Saham
-    4: 'Kinerja Sistem & Fitur Order',          # Trailing Stop, Market Hours, Lag
-    5: 'Administrasi Akun & RDN',               # Bank Jago, RDN, Pendaftaran
-    6: 'Transaksi Keuangan (Deposit/WD)',       # Deposit, Withdraw, Dividen
-    7: 'Stabilitas Aplikasi & Maintenance'      # Error, Crash, Server Down
-}
-
-# TOPIC_MAPPING = {
-#     0: 'Akses Aplikasi',
-#     1: 'Fitur & Kemudahan Investasi',
-#     2: 'Fitur & Kemudahan Investasi',
-#     3: 'Fitur & Kemudahan Investasi',
-#     4: 'Stabilitas Sistem Perdagangan',
-#     5: 'Integrasi Rekening Bank',
-#     6: 'Proses Transaksi Keuangan',
-#     7: 'Stabilitas Sistem Perdagangan'
-# }
+st.title("Aspect-Based Sentiment Analysis")
+st.write("Analisis sentimen dan aspek pada ulasan aplikasi menggunakan BIGRU + FastText")
 
 @st.cache_resource
-def load_resources():
-    # Load Models
-    try:
-        sentiment_model = load_model('sentiment_model.h5')
-        topic_model = load_model('topic_model.h5')
-    except Exception as e:
-        st.error(f"Error loading models: {e}")
-        return None, None, None, None
+def load_models():
+    sentiment_model = load_model("sentiment_model.h5")
+    aspect_model = load_model("topic_model.h5")
+    return sentiment_model, aspect_model
 
-    # Load Tokenizers
-    # Note: You must export your tokenizers from the notebook as pickles!
-    try:
-        with open('tokenizer_sentiment.pkl', 'rb') as f:
-            sentiment_tokenizer = pickle.load(f)
-        with open('tokenizer_topic.pkl', 'rb') as f:
-            topic_tokenizer = pickle.load(f)
-    except FileNotFoundError:
-        st.warning("Tokenizer files (tokenizer_sentiment.pkl, tokenizer_topic.pkl) not found. Text processing will fail until these are provided.")
-        return sentiment_model, topic_model, None, None
-    except Exception as e:
-        st.error(f"Error loading tokenizers: {e}")
-        return sentiment_model, topic_model, None, None
+@st.cache_resource
+def load_tokenizers():
+    with open("tokenizer_sentiment.pkl", "rb") as f:
+        tok_sent = pickle.load(f)
+    with open("tokenizer_topic.pkl", "rb") as f:
+        tok_asp = pickle.load(f)
+    return tok_sent, tok_asp
 
-    return sentiment_model, topic_model, sentiment_tokenizer, topic_tokenizer
+@st.cache_resource
+def load_preprocess_resources():
+    with open("merged_slang_dict.json", "r", encoding="utf-8") as f:
+        slang_dict = json.load(f)
 
-def load_stopwords():
-    stopwords_sentiment = None
-    stopwords_topic = None
-    
-    # Load for Sentiment (Filtered)
-    try:
-        with open('stopwords-id-filtered.txt', 'r') as f:
-            stopwords_sentiment = set(line.strip() for line in f)
-    except FileNotFoundError:
-        st.warning("Stopwords file (stopwords-id-filtered.txt) not found.")
+    # Stopwords for Sentiment (Filtered)
+    with open("stopwords-id-filtered.txt", "r", encoding="utf-8") as f:
+        stopwords_sent = set(f.read().splitlines())
+    if "nya" not in stopwords_sent:
+        stopwords_sent.add("nya")
 
-    # Load for Topic (Full)
-    try:
-        with open('stopwords-id.txt', 'r') as f:
-            stopwords_topic = set(line.strip() for line in f)
-    except FileNotFoundError:
-        st.warning("Stopwords file (stopwords-id.txt) not found.")
-        
-    return stopwords_sentiment, stopwords_topic
+    # Stopwords for Topic (Full)
+    with open("stopwords-id.txt", "r", encoding="utf-8") as f:
+        stopwords_topic = set(f.read().splitlines())
+    if "nya" not in stopwords_topic:
+        stopwords_topic.add("nya")
 
-def preprocess_base(text):
-    if not text:
-        return ""
+    stemmer = StemmerFactory().create_stemmer()
+
+    return slang_dict, stopwords_sent, stopwords_topic, stemmer
+
+sentiment_model, aspect_model = load_models()
+tok_sent, tok_asp = load_tokenizers()
+slang_dict, stopwords_sent, stopwords_topic, stemmer = load_preprocess_resources()
+
+def cleaning(text: str) -> str:
     text = text.lower()
-    text = re.sub(r"&\w+;", " ", text)             # hapus HTML entities (&amp;, &quot;, dll.)
-    text = re.sub(r"[^a-z]", " ", text)         # hapus semua karakter kecuali a-z
-    text = re.sub(r"\t", " ", text)             # ganti tab dengan spasi
-    text = re.sub(r"\n", " ", text)             # ganti new line dengan spasi
-    text = re.sub(r"\s+", " ", text)            # ganti spasi > 1 dengan 1 spasi
-    text = re.sub(r"(.)\1{2,}", r"\1\1", text)  # ganti huruf berulang ≥ 3 jadi 2
-    text = text.strip()
+    text = re.sub(r"&\w+;", " ", text)
+    text = re.sub(r"[^a-z]", " ", text)
+    text = re.sub(r"\t|\n", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"(.)\1{2,}", r"\1\1", text)
+    return text.strip()
+
+
+def normalize_slang(text: str) -> str:
+    tokens = re.findall(r"\w+|\S", text)
+    normalized = [slang_dict.get(tok, tok) for tok in tokens]
+    return " ".join(normalized)
+
+
+def remove_stopwords(text: str, stopwords_set: set) -> str:
+    return " ".join([w for w in text.split() if w not in stopwords_set])
+
+
+def stemming(text: str) -> str:
+    return stemmer.stem(text)
+
+
+def preprocess_sentiment(text: str) -> str:
+    """
+    Pipeline for Sentiment Model:
+    Cleaning -> Slang Normalization -> Stopwords Removal (Filtered) -> (No Stemming)
+    """
+    text = cleaning(text)
+    text = normalize_slang(text)
+    text = remove_stopwords(text, stopwords_sent)
     return text
 
-def preprocess_for_sentiment(text, stopwords_set):
-    text = preprocess_base(text)
-    
-    # Stopword Removal (Filtered)
-    if stopwords_set:
-        text = ' '.join([word for word in text.split() if word not in stopwords_set])
-            
+
+def preprocess_topic(text: str) -> str:
+    """
+    Pipeline for Topic Model:
+    Cleaning -> Slang Normalization -> Stopwords Removal (Full) -> Stemming
+    """
+    text = cleaning(text)
+    text = normalize_slang(text)
+    text = remove_stopwords(text, stopwords_topic)
+    text = stemming(text)
     return text
 
-def preprocess_for_topic(text, stopwords_set):
-    text = preprocess_base(text)
-    
-    # Stopword Removal (Full)
-    if stopwords_set:
-        text = ' '.join([word for word in text.split() if word not in stopwords_set])
-    
-    # Stemming
-    try:
-        from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
-        factory = StemmerFactory()
-        stemmer = factory.create_stemmer()
-        text = stemmer.stem(text)
-    except ImportError:
-        pass
+
+def tokenize_and_pad(text: str, tokenizer):
+    seq = tokenizer.texts_to_sequences([text])
+    pad = pad_sequences(seq, maxlen=MAX_LEN, padding="post", truncating="post")
+    return pad
+
+st.subheader("Masukkan Teks Ulasan")
+user_input = st.text_area(
+    "Contoh: aplikasinya sering error dan pembayaran gagal",
+    height=120
+)
+
+
+if st.button("Analisis"):
+    if user_input.strip() == "":
+        st.warning("Teks tidak boleh kosong.")
+    else:
+        # Preprocessing & Analysis for Sentiment
+        text_sent_processed = preprocess_sentiment(user_input)
+        X_sent = tokenize_and_pad(text_sent_processed, tok_sent)
+        sent_prob = sentiment_model.predict(X_sent, verbose=0)[0][0]
+        sent_label = "Positif" if sent_prob >= 0.5 else "Negatif"
+
+        # Preprocessing & Analysis for Topic
+        text_topic_processed = preprocess_topic(user_input)
+        X_asp = tokenize_and_pad(text_topic_processed, tok_asp)
+        asp_probs = aspect_model.predict(X_asp, verbose=0)[0]
+        asp_idx = np.argmax(asp_probs)
+        asp_conf = asp_probs[asp_idx]
         
-    return text
+        # Get Topic Label from Mapping
+        asp_label = TOPIC_MAPPING.get(asp_idx, f"Topic {asp_idx}")
 
-def main():
-    st.title("📊 Aspect Based Sentiment Analysis")
-    st.markdown("Analisis Sentimen dan Topik untuk Ulasan Aplikasi Stockbit")
-    
-    # Load resources
-    sentiment_model, topic_model, sent_tokenizer, topic_tokenizer = load_resources()
-    stopwords_sentiment, stopwords_topic = load_stopwords()
-    
-    if not sentiment_model or not topic_model:
-        st.warning("Models could not be loaded. Please check file paths.")
-        return
+        # Visualization
+        st.divider()
+        st.caption(f"**Processed Text (Sentiment):** `{text_sent_processed}`")
+        st.caption(f"**Processed Text (Topic):** `{text_topic_processed}`")
+        
+        st.subheader("Hasil Analisis")
 
-    # Input section
-    with st.form("analysis_form"):
-        user_input = st.text_area("Masukkan Ulasan Anda:", height=100, placeholder="Contoh: Aplikasi ini sangat membantu untuk investasi saham bagi pemula.")
-        submitted = st.form_submit_button("Analisis")
+        col1, col2 = st.columns(2)
 
-    if submitted and user_input:
-        if sent_tokenizer is None or topic_tokenizer is None:
-            st.error("Tokenizers are missing. Please upload 'tokenizer_sentiment.pkl' and 'tokenizer_topic.pkl'.")
-        else:
-            # Preprocess
-            processed_sent = preprocess_for_sentiment(user_input, stopwords_sentiment)
-            processed_topic = preprocess_for_topic(user_input, stopwords_topic)
-            
-            # 1. Sentiment Analysis
-            sent_seq = sent_tokenizer.texts_to_sequences([processed_sent])
-            sent_pad = pad_sequences(sent_seq, maxlen=MAX_SEQUENCE_LENGTH, padding='post', truncating='post')
-            
-            sent_prob = sentiment_model.predict(sent_pad)[0][0]
-            sentiment_label = "Positif" if sent_prob > 0.5 else "Negatif"
-            sentiment_color = "green" if sent_prob > 0.5 else "red"
-            
-            prob_pos = float(sent_prob)
-            prob_neg = 1.0 - prob_pos
-            
-            # 2. Topic Analysis
-            topic_seq = topic_tokenizer.texts_to_sequences([processed_topic])
-            topic_pad = pad_sequences(topic_seq, maxlen=MAX_SEQUENCE_LENGTH, padding='post', truncating='post')
-            
-            topic_probs = topic_model.predict(topic_pad)[0]
-            topic_idx = np.argmax(topic_probs)
-            topic_label = TOPIC_MAPPING.get(topic_idx, "Unknown")
-            topic_confidence = topic_probs[topic_idx]
+        # with col1:
+        #     st.metric(
+        #         label="Sentimen",
+        #         value=sent_label,
+        #         delta=f"Conf: {sent_prob:.2%}" if sent_prob >= 0.5 else f"Conf: {(1-sent_prob):.2%}"
+        #     )
+        #     # st.progress(float(sent_prob))
 
-            # Display Results
-            st.write("---")
-            col1, col2 = st.columns(2)
+        # with col2:
+        #     st.metric(
+        #         label="Aspek / Topik",
+        #         value=asp_label,
+        #         delta=f"Conf: {asp_conf:.2%}"
+        #     )
             
-            with col1:
-                st.subheader("Sentimen")
-                st.markdown(f"<h3 style='color: {sentiment_color};'>{sentiment_label}</h3>", unsafe_allow_html=True)
-                
-                # Menampilkan probabilitas detail
-                sub_col_a, sub_col_b = st.columns(2)
-                with sub_col_a:
-                    st.metric("Positif", f"{prob_pos:.1%}")
-                with sub_col_b:
-                    st.metric("Negatif", f"{prob_neg:.1%}")
-                
-                # Progress bar visual (semakin penuh semakin positif)
-                # st.caption("Skor Probabilitas:")
-                # st.progress(prob_pos)
 
-            with col2:
-                st.subheader("Aspek / Topik")
-                st.info(f"**{topic_label}**")
-                st.metric("Confidence", f"{topic_confidence:.1%}")
+        with col1:
+            st.subheader("Sentimen")
+            # st.markdown(f"<h3 style='color: {sentiment_color};'>{sentiment_label}</h3>", unsafe_allow_html=True)
             
-            with st.expander("Lihat Detail Preprocessing"):
-                st.write("**Original Text:**")
-                st.write(user_input)
-                st.write(f"**Processed for Sentiment:** (Stopwords: {len(stopwords_sentiment) if stopwords_sentiment else 0} words loaded)")
-                st.write(processed_sent)
-                st.write(f"**Processed for Topic:** (Stopwords: {len(stopwords_topic) if stopwords_topic else 0} words loaded + Stemming)")
-                st.write(processed_topic)
+            # Menampilkan probabilitas detail
+            st.info(f"**{sent_label}**")
+            st.metric("Confidence", f"{sent_prob:.2%}")
+            
+            # Progress bar visual (semakin penuh semakin positif)
+            # st.caption("Skor Probabilitas:")
+            # st.progress(prob_pos)
 
-if __name__ == "__main__":
-    main()
+        with col2:
+            st.subheader("Aspek / Topik")
+            st.info(f"**{asp_label}**")
+            st.metric("Confidence", f"{asp_conf:.2%}")
+        # Display bar chart for top 3 topics
+        # st.write("Top 3 Topics Predictions:")
+        # top_3_indices = asp_probs.argsort()[-3:][::-1]
+        # for i in top_3_indices:
+        #     t_label = TOPIC_MAPPING.get(i, f"Topic {i}")
+        #     st.write(f"- **{t_label}**: {asp_probs[i]:.2%}")
