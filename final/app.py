@@ -123,7 +123,7 @@ def tokenize_and_pad(text: str, tokenizer):
 
 st.subheader("Masukkan Teks Ulasan")
 user_input = st.text_area(
-    "Contoh: aplikasinya sering error dan pembayaran gagal",
+    "Contoh: Tampilan aplikasinya sederhana dan mudah dipahami",
     height=120
 )
 
