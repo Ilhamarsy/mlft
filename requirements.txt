@@ -21,3 +21,7 @@ requests>=2.25.0
 
 # Additional utilities
 regex>=2021.4.24
+
+# Streamlit App
+streamlit
+tensorflow
