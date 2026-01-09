@@ -179,7 +179,7 @@ if st.button("Analisis"):
             
             # Menampilkan probabilitas detail
             st.info(f"**{sent_label}**")
-            st.metric("Confidence", f"{sent_prob:.2%}")
+            st.metric("Confidence", f"{sent_prob:.2%}" if sent_prob >= 0.5 else f"{(1-sent_prob):.2%}")
             
             # Progress bar visual (semakin penuh semakin positif)
             # st.caption("Skor Probabilitas:")
