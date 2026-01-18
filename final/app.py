@@ -3,6 +3,7 @@ import numpy as np
 import pickle
 import re
 import json
+import pandas as pd
 
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.sequence import pad_sequences
@@ -121,77 +122,115 @@ def tokenize_and_pad(text: str, tokenizer):
     pad = pad_sequences(seq, maxlen=MAX_LEN, padding="post", truncating="post")
     return pad
 
-st.subheader("Masukkan Teks Ulasan")
-user_input = st.text_area(
-    "Contoh: Tampilan aplikasinya sederhana dan mudah dipahami",
-    height=120
-)
+st.write("---")
+tab1, tab2 = st.tabs(["Single Prediction", "Batch Prediction (Upload)"])
 
+with tab1:
+    st.subheader("Masukkan Teks Ulasan")
+    user_input = st.text_area(
+        "Contoh: Tampilan aplikasinya sederhana dan mudah dipahami",
+        height=120
+    )
 
-if st.button("Analisis"):
-    if user_input.strip() == "":
-        st.warning("Teks tidak boleh kosong.")
-    else:
-        # Preprocessing & Analysis for Sentiment
-        text_sent_processed = preprocess_sentiment(user_input)
-        X_sent = tokenize_and_pad(text_sent_processed, tok_sent)
-        sent_prob = sentiment_model.predict(X_sent, verbose=0)[0][0]
-        sent_label = "Positif" if sent_prob >= 0.5 else "Negatif"
+    if st.button("Analisis"):
+        if user_input.strip() == "":
+            st.warning("Teks tidak boleh kosong.")
+        else:
+            # Preprocessing & Analysis for Sentiment
+            text_sent_processed = preprocess_sentiment(user_input)
+            X_sent = tokenize_and_pad(text_sent_processed, tok_sent)
+            sent_prob = sentiment_model.predict(X_sent, verbose=0)[0][0]
+            sent_label = "Positif" if sent_prob >= 0.5 else "Negatif"
 
-        # Preprocessing & Analysis for Topic
-        text_topic_processed = preprocess_topic(user_input)
-        X_asp = tokenize_and_pad(text_topic_processed, tok_asp)
-        asp_probs = aspect_model.predict(X_asp, verbose=0)[0]
-        asp_idx = np.argmax(asp_probs)
-        asp_conf = asp_probs[asp_idx]
-        
-        # Get Topic Label from Mapping
-        asp_label = TOPIC_MAPPING.get(asp_idx, f"Topic {asp_idx}")
-
-        # Visualization
-        st.divider()
-        st.caption(f"**Processed Text (Sentiment):** `{text_sent_processed}`")
-        st.caption(f"**Processed Text (Topic):** `{text_topic_processed}`")
-        
-        st.subheader("Hasil Analisis")
-
-        col1, col2 = st.columns(2)
-
-        # with col1:
-        #     st.metric(
-        #         label="Sentimen",
-        #         value=sent_label,
-        #         delta=f"Conf: {sent_prob:.2%}" if sent_prob >= 0.5 else f"Conf: {(1-sent_prob):.2%}"
-        #     )
-        #     # st.progress(float(sent_prob))
-
-        # with col2:
-        #     st.metric(
-        #         label="Aspek / Topik",
-        #         value=asp_label,
-        #         delta=f"Conf: {asp_conf:.2%}"
-        #     )
+            # Preprocessing & Analysis for Topic
+            text_topic_processed = preprocess_topic(user_input)
+            X_asp = tokenize_and_pad(text_topic_processed, tok_asp)
+            asp_probs = aspect_model.predict(X_asp, verbose=0)[0]
+            asp_idx = np.argmax(asp_probs)
+            asp_conf = asp_probs[asp_idx]
             
+            # Get Topic Label from Mapping
+            asp_label = TOPIC_MAPPING.get(asp_idx, f"Topic {asp_idx}")
 
-        with col1:
-            st.subheader("Sentimen")
-            # st.markdown(f"<h3 style='color: {sentiment_color};'>{sentiment_label}</h3>", unsafe_allow_html=True)
+            # Visualization
+            st.divider()
+            st.caption(f"**Processed Text (Sentiment):** `{text_sent_processed}`")
+            st.caption(f"**Processed Text (Topic):** `{text_topic_processed}`")
             
-            # Menampilkan probabilitas detail
-            st.info(f"**{sent_label}**")
-            st.metric("Confidence", f"{sent_prob:.2%}" if sent_prob >= 0.5 else f"{(1-sent_prob):.2%}")
-            
-            # Progress bar visual (semakin penuh semakin positif)
-            # st.caption("Skor Probabilitas:")
-            # st.progress(prob_pos)
+            st.subheader("Hasil Analisis")
 
-        with col2:
-            st.subheader("Aspek / Topik")
-            st.info(f"**{asp_label}**")
-            st.metric("Confidence", f"{asp_conf:.2%}")
-        # Display bar chart for top 3 topics
-        # st.write("Top 3 Topics Predictions:")
-        # top_3_indices = asp_probs.argsort()[-3:][::-1]
-        # for i in top_3_indices:
-        #     t_label = TOPIC_MAPPING.get(i, f"Topic {i}")
-        #     st.write(f"- **{t_label}**: {asp_probs[i]:.2%}")
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.subheader("Sentimen")
+                st.info(f"**{sent_label}**")
+                st.metric("Confidence", f"{sent_prob:.2%}" if sent_prob >= 0.5 else f"{(1-sent_prob):.2%}")
+                
+            with col2:
+                st.subheader("Aspek / Topik")
+                st.info(f"**{asp_label}**")
+                st.metric("Confidence", f"{asp_conf:.2%}")
+
+with tab2:
+    st.header("Upload File CSV/Excel")
+    uploaded_file = st.file_uploader("Upload file Anda (pastikan ada kolom teks)", type=["csv", "xlsx"])
+    
+    if uploaded_file is not None:
+        try:
+            if uploaded_file.name.endswith(".csv"):
+                df = pd.read_csv(uploaded_file)
+            else:
+                df = pd.read_excel(uploaded_file)
+            
+            st.write("Preview Data:")
+            st.dataframe(df.head())
+            
+            text_col = st.selectbox("Pilih kolom yang berisi ulasan/text:", df.columns)
+            
+            if st.button("Proses Prediksi Batch"):
+                with st.spinner("Sedang memproses..."):
+                    # 1. Preprocessing
+                    # Convert to string to handle potential non-string inputs safely
+                    texts = df[text_col].astype(str).tolist()
+                    
+                    # Sentiment Batch
+                    processed_sent = [preprocess_sentiment(t) for t in texts]
+                    seq_sent = tok_sent.texts_to_sequences(processed_sent)
+                    pad_sent = pad_sequences(seq_sent, maxlen=MAX_LEN, padding="post", truncating="post")
+                    
+                    sent_probs = sentiment_model.predict(pad_sent, verbose=0)
+                    
+                    sent_labels = ["Positif" if p[0] >= 0.5 else "Negatif" for p in sent_probs]
+                    sent_confs  = [p[0] if p[0] >= 0.5 else 1 - p[0] for p in sent_probs]
+                    
+                    # Topic Batch
+                    processed_topic = [preprocess_topic(t) for t in texts]
+                    seq_topic = tok_asp.texts_to_sequences(processed_topic)
+                    pad_topic = pad_sequences(seq_topic, maxlen=MAX_LEN, padding="post", truncating="post")
+                    
+                    topic_probs = aspect_model.predict(pad_topic, verbose=0)
+                    
+                    topic_indices = np.argmax(topic_probs, axis=1)
+                    topic_confs   = np.max(topic_probs, axis=1)
+                    topic_labels  = [TOPIC_MAPPING.get(idx, f"Topic {idx}") for idx in topic_indices]
+                    
+                    # Store to DF
+                    df['Prediksi Sentimen'] = sent_labels
+                    df['Conf Sentimen'] = sent_confs
+                    
+                    df['Prediksi Aspek'] = topic_labels
+                    df['Conf Aspek'] = topic_confs
+                    
+                    st.success("Proses selesai!")
+                    st.dataframe(df)
+                    
+                    # CSV Download
+                    csv_data = df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="Download Hasil sebagai CSV",
+                        data=csv_data,
+                        file_name="hasil_prediksi_absa.csv",
+                        mime="text/csv"
+                    )
+        except Exception as e:
+            st.error(f"Terjadi kesalahan: {e}")
